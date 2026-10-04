@@ -84,6 +84,10 @@ def create_handler(service, rules, static_dir):
                         return self._send_html(200, handle.read())
                 if parts == ["api", "audit"]:
                     return self._send(200, {"items": service.audit_log()})
+                if parts == ["api", "sync-batches"]:
+                    return self._send(200, {"items": service.list_sync_batches()})
+                if len(parts) == 3 and parts[:2] == ["api", "sync-batches"]:
+                    return self._send(200, service.get_sync_batch(parts[2]))
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     return self._send(200, service.get(parts[2]))
                 if len(parts) >= 2 and parts[0] == "api" and parts[1] != "entities":
@@ -101,9 +105,15 @@ def create_handler(service, rules, static_dir):
                 parsed = urlparse(self.path)
                 parts = [part for part in parsed.path.split("/") if part]
                 actor = self._actor()
-                if parts == ["api", "offline-records"]:
+                if parts == ["api", "sync-batches"]:
                     body = self._body()
-                    return self._send(200, {"items": service.merge_offline(actor, body.get("records", []))})
+                    batch = service.sync_batch(
+                        actor,
+                        body.get("batch_id"),
+                        body.get("source_id"),
+                        body.get("records", []),
+                    )
+                    return self._send(200, batch)
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     body = self._body()
                     action = body.pop("action", None)

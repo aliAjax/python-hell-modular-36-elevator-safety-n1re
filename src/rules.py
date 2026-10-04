@@ -110,7 +110,40 @@ def _grant_permit(actor, entity, data, lookup):
         raise ConflictError("permit requires a passed inspection")
     if [r for r in _all(lookup, "remediation") if r["data"].get("equipment_id") == equipment["id"] and r["status"] != "closed"]:
         raise ConflictError("permit blocked by open remediation")
+    if [
+        a
+        for a in _all(lookup, "alarm")
+        if a["data"].get("equipment_id") == equipment["id"]
+        and a["status"] not in ("closed", "false_alarm")
+    ]:
+        raise ConflictError("permit blocked by active alarm")
     return {"granted_by": actor.user_id, "granted_at": datetime.utcnow().isoformat(timespec="seconds") + "Z"}
+
+
+def _return_equipment_to_service(actor, entity, data, lookup):
+    # Re-enabling requires a fresh central check: open remediation or an
+    # unresolved alarm both block return, and only a currently-granted permit
+    # (any older one has been revoked by the status change) unlocks it.
+    if [
+        r
+        for r in _all(lookup, "remediation")
+        if r["data"].get("equipment_id") == entity["id"] and r["status"] != "closed"
+    ]:
+        raise ConflictError("equipment cannot return to service with open remediation")
+    if [
+        a
+        for a in _all(lookup, "alarm")
+        if a["data"].get("equipment_id") == entity["id"]
+        and a["status"] not in ("closed", "false_alarm")
+    ]:
+        raise ConflictError("equipment cannot return to service with active alarm")
+    if not [
+        p
+        for p in _all(lookup, "permit")
+        if p["data"].get("equipment_id") == entity["id"] and p["status"] == "granted"
+    ]:
+        raise ConflictError("equipment cannot return to service without a granted permit")
+    return {}
 
 
 def _verify_remediation(actor, entity, data, lookup):
@@ -130,12 +163,12 @@ class RuleEngine:
     ALIASES = {
         "equipments": "equipment", "inspections": "inspection", "maintenances": "maintenance",
         "alarms": "alarm", "rescue_jobs": "rescue_job", "remediations": "remediation",
-        "permits": "permit",
+        "permits": "permit", "offline_records": "offline_record",
     }
     INITIAL_STATUS = {
         "equipment": "in_service", "inspection": "scheduled", "maintenance": "planned",
         "alarm": "received", "rescue_job": "dispatched", "remediation": "open",
-        "permit": "blocked",
+        "permit": "blocked", "offline_record": "merged",
     }
     TRANSITIONS = {
         "equipment": {
@@ -239,6 +272,7 @@ class RuleEngine:
         ("permit", "grant"): _grant_permit,
         ("remediation", "verify"): _verify_remediation,
         ("alarm", "close"): _complete_rescue,
+        ("equipment", "return_to_service"): _return_equipment_to_service,
     }
 
     def normalize_kind(self, kind):
