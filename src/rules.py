@@ -126,6 +126,26 @@ def _complete_rescue(actor, entity, data, lookup):
     return {"resolved_by": actor.user_id}
 
 
+def _return_to_service(actor, entity, data, lookup):
+    equipment_id = entity["id"]
+    for item in _all(lookup, "remediation"):
+        if item["data"].get("equipment_id") == equipment_id and item["status"] != "closed":
+            raise ConflictError("return to service blocked by open remediation")
+    for alarm in _all(lookup, "alarm"):
+        if alarm["data"].get("equipment_id") == equipment_id and alarm["status"] not in ("closed", "false_alarm"):
+            raise ConflictError("return to service blocked by unclosed alarm")
+    permits = [
+        p
+        for p in _all(lookup, "permit")
+        if p["data"].get("equipment_id") == equipment_id
+        and p["status"] == "granted"
+        and p["data"].get("purpose") == "return_to_service"
+    ]
+    if not permits:
+        raise ConflictError("return to service requires a granted return-to-service permit")
+    return {"returned_by": actor.user_id}
+
+
 class RuleEngine:
     ALIASES = {
         "equipments": "equipment", "inspections": "inspection", "maintenances": "maintenance",
@@ -239,6 +259,7 @@ class RuleEngine:
         ("permit", "grant"): _grant_permit,
         ("remediation", "verify"): _verify_remediation,
         ("alarm", "close"): _complete_rescue,
+        ("equipment", "return_to_service"): _return_to_service,
     }
 
     def normalize_kind(self, kind):

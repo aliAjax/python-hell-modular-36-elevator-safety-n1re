@@ -54,6 +54,17 @@ class SQLiteRepository:
                     created_at TEXT NOT NULL,
                     PRIMARY KEY(actor_id, idem_key)
                 );
+                CREATE TABLE IF NOT EXISTS offline_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    actor_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
             """)
 
     @staticmethod
@@ -198,6 +209,66 @@ class SQLiteRepository:
                 "VALUES (?, ?, ?, ?)",
                 (actor_id, idem_key, entity_id, utcnow()),
             )
+
+    @staticmethod
+    def _batch_from_row(row):
+        return {
+            "batch_id": row["batch_id"],
+            "actor_id": row["actor_id"],
+            "payload": json.loads(row["payload"]),
+            "status": row["status"],
+            "result": json.loads(row["result"]) if row["result"] else None,
+            "attempts": int(row["attempts"]),
+            "last_error": row["last_error"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def get_batch(self, batch_id):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM offline_batches WHERE batch_id = ?", (batch_id,)
+            ).fetchone()
+        return self._batch_from_row(row) if row else None
+
+    def create_batch(self, batch_id, actor_id, payload):
+        now = utcnow()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO offline_batches(batch_id, actor_id, payload, status, result, attempts, last_error, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'pending', NULL, 0, NULL, ?, ?)",
+                (
+                    batch_id,
+                    actor_id,
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_batch(batch_id)
+
+    def mark_batch(self, batch_id, status, result=None, error=None):
+        now = utcnow()
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE offline_batches SET status = ?, result = ?, attempts = attempts + 1, "
+                "last_error = ?, updated_at = ? WHERE batch_id = ?",
+                (
+                    status,
+                    json.dumps(result, ensure_ascii=False, sort_keys=True) if result is not None else None,
+                    error,
+                    now,
+                    batch_id,
+                ),
+            )
+        return self.get_batch(batch_id)
+
+    def list_batches(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM offline_batches ORDER BY created_at, batch_id"
+            ).fetchall()
+        return [self._batch_from_row(row) for row in rows]
 
     def ping(self):
         with self._connect() as connection:
